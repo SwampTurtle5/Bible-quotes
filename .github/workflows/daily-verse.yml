@@ -1,0 +1,58 @@
+name: Daily Bible Verse
+
+"on":
+  schedule:
+    # GitHub Actions cron is always UTC and never adjusts for daylight
+    # saving, so we run TWICE a day and let the "Check it's 8 AM Eastern"
+    # step below skip whichever one doesn't apply. This keeps the post
+    # at a true 8:00 AM US Eastern time year-round.
+    - cron: "0 12 * * *" # 12:00 UTC = 8:00 AM EDT (summer, ~Mar-Nov)
+    - cron: "0 13 * * *" # 13:00 UTC = 8:00 AM EST (winter, ~Nov-Mar)
+  workflow_dispatch: {} # allows manual "Run workflow" button for testing, always runs regardless of time
+
+permissions:
+  contents: write # needed so the workflow can commit history.json back
+
+jobs:
+  post-verse:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check it's 8 AM Eastern (skip the wrong cron trigger)
+        if: github.event_name == 'schedule'
+        run: |
+          hour=$(TZ="America/New_York" date +%H)
+          echo "Current Eastern hour: $hour"
+          if [ "$hour" != "08" ]; then
+            echo "Not 8 AM Eastern right now -- skipping the rest of the job."
+            echo "SKIP=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Check out repo
+        if: env.SKIP != 'true'
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        if: env.SKIP != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        if: env.SKIP != 'true'
+        run: pip install -r requirements.txt
+
+      - name: Post verse to Discord
+        if: env.SKIP != 'true'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          BIBLE_TRANSLATION: NLT
+        run: python bot.py
+
+      - name: Commit updated history
+        if: env.SKIP != 'true'
+        run: |
+          git config user.name "verse-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add history.json
+          git diff --staged --quiet || git commit -m "Update verse history [skip ci]"
+          git push
